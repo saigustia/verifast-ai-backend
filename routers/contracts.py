@@ -7,7 +7,7 @@ from typing import Dict
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from models.schemas import DocumentAnalysisResult, QueryRequest, QueryResponse, RiskLevel
+from models.schemas import DocumentAnalysisResult, QueryRequest, QueryResponse, RiskLevel, SourceReference
 from services import chunking, llm_service, ocr_service, validation_service
 from services.embedding_service import EmbeddingService
 from services.retrieval_service import RetrievalService
@@ -94,7 +94,10 @@ async def query_document(request: QueryRequest):
     
     return QueryResponse(
         answer=answer,
-        source_chunks=[c.chunk_id for c, _ in results],
+        source_chunks=[
+            SourceReference(chunk_id=c.chunk_id, page_number=c.page_number)
+            for c, _ in results
+        ],
         confidence=results[0][1],
         found=True,
     )

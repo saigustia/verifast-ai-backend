@@ -47,14 +47,17 @@ class DocumentAnalysisResult(BaseModel):
     overall_risk_score: float
     total_pages: int
 
-
 class QueryRequest(BaseModel):
     document_id: str
     question: str
 
+class SourceReference(BaseModel):
+    chunk_id: str
+    page_number: int
+    section_title: Optional[str] = None
 
 class QueryResponse(BaseModel):
     answer: str
-    source_chunks: List[str]
+    source_chunks: List[SourceReference]
     confidence: float
     found: bool
