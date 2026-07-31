@@ -68,3 +68,26 @@ def extract_clauses(context: str, page_number: int) -> List[ExtractedClause]:
             )
         )
     return clauses
+
+GROUNDED_ANSWER_SYSTEM_PROMPT = """You are a contract Q&A assistant.
+
+Rules:
+- Answer ONLY using the provided context. Never use outside knowledge.
+- If the context does not contain enough information to answer, say so
+  explicitly — do not guess or infer beyond what's written.
+- Keep answers concise and factual. Reference the relevant clause when possible.
+"""
+
+
+def answer_question(context: str, question: str) -> str:
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": GROUNDED_ANSWER_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": f"Context:\n{context}\n\nQuestion: {question}",
+            },
+        ],
+    )
+    return response.choices[0].message.content or "Tidak dapat menjawab dari konteks yang tersedia."

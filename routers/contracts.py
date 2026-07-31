@@ -90,10 +90,10 @@ async def query_document(request: QueryRequest):
         chunking.get_chunk_with_parent_context(chunk, doc["chunks"]) for chunk, _ in results
     )
 
-    # TODO: call llm_service with a grounded-answer prompt using `context`,
-    # then run the answer through the same substring grounding check.
+    answer = llm_service.answer_question(context, request.question)
+    
     return QueryResponse(
-        answer=f"[wire up grounded-answer LLM call here]\nContext retrieved:\n{context[:300]}...",
+        answer=answer,
         source_chunks=[c.chunk_id for c, _ in results],
         confidence=results[0][1],
         found=True,
