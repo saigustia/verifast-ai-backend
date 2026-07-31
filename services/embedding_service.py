@@ -7,8 +7,12 @@ touching retrieval_service.py.
 from typing import List, Tuple
 
 import numpy as np
+from openai import OpenAI
 
+from config import OPENAI_API_KEY
 from models.schemas import DocumentChunk
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 class EmbeddingService:
@@ -17,12 +21,9 @@ class EmbeddingService:
         self._store: List[Tuple[DocumentChunk, np.ndarray]] = []  # replace with real vector DB
 
     def embed_text(self, text: str) -> np.ndarray:
-        """
-        TODO: call a real embedding API (OpenAI / Voyage / Cohere).
-        Skeleton only — raises until wired up, so failures are loud
-        instead of silently returning garbage vectors.
-        """
-        raise NotImplementedError("Wire up an embedding API call here.")
+        """Calls OpenAI Embeddings API and returns the vector as a numpy array."""
+        response = client.embeddings.create(model=self.model_name, input=text)
+        return np.array(response.data[0].embedding)
 
     def index_chunks(self, chunks: List[DocumentChunk]) -> None:
         for chunk in chunks:
