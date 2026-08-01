@@ -2,7 +2,25 @@ from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+from typing import Optional
 
+
+class ProcessingStatus(str, Enum):
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class UploadAcceptedResponse(BaseModel):
+    document_id: str
+    status: ProcessingStatus
+
+
+class StatusResponse(BaseModel):
+    document_id: str
+    status: ProcessingStatus
+    result: Optional[DocumentAnalysisResult] = None
+    error: Optional[str] = None
 
 class RiskLevel(str, Enum):
     HIGH = "high"
