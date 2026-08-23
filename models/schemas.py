@@ -2,7 +2,6 @@ from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 class ProcessingStatus(str, Enum):
@@ -19,14 +18,14 @@ class UploadAcceptedResponse(BaseModel):
 class StatusResponse(BaseModel):
     document_id: str
     status: ProcessingStatus
-    result: Optional[DocumentAnalysisResult] = None
+    result: Optional["ApplicationAnalysisResult"] = None
     error: Optional[str] = None
 
-class RiskLevel(str, Enum):
-    HIGH = "high"
-    MEDIUM = "medium"
-    LOW = "low"
-    SAFE = "safe"
+
+class FieldStatus(str, Enum):
+    FOUND = "found"
+    MISSING = "missing"
+    UNCLEAR = "unclear"
 
 
 class DocumentChunk(BaseModel):
@@ -38,41 +37,44 @@ class DocumentChunk(BaseModel):
     chunk_type: str = "child"  # "parent" or "child"
 
 
-class ExtractedClause(BaseModel):
-    clause_id: str
-    clause_type: str
+class ExtractedField(BaseModel):
+    field_id: str
+    field_type: str
     extracted_text: str
     page_number: int
     section_reference: Optional[str] = None
-    risk_level: RiskLevel
+    status: FieldStatus
     reasoning: str
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
     is_grounded: bool = False
 
 
-class ConsistencyFlag(BaseModel):
+class MissingDocumentFlag(BaseModel):
     flag_type: str
     description: str
-    page_number: int
-    risk_level: RiskLevel = RiskLevel.HIGH
+    related_field_type: Optional[str] = None
+    severity: FieldStatus = FieldStatus.MISSING
 
 
-class DocumentAnalysisResult(BaseModel):
+class ApplicationAnalysisResult(BaseModel):
     document_id: str
     filename: str
-    clauses: List[ExtractedClause]
-    consistency_flags: List[ConsistencyFlag]
-    overall_risk_score: float
+    fields: List[ExtractedField]
+    missing_document_flags: List[MissingDocumentFlag]
+    completeness_score: float
     total_pages: int
+
 
 class QueryRequest(BaseModel):
     document_id: str
     question: str
 
+
 class SourceReference(BaseModel):
     chunk_id: str
     page_number: int
     section_title: Optional[str] = None
+
 
 class QueryResponse(BaseModel):
     answer: str

@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 from models.schemas import DocumentChunk
 
 SECTION_PATTERN = re.compile(
-    r"^(Article|Pasal|Section|Clause)\s+(\d+[.\d]*)", re.IGNORECASE | re.MULTILINE
+    r"^#{0,3}\s*(\d{1,2})\.\s+([A-ZÄÖÜ][^\n:]{3,100})$", re.MULTILINE
 )
 
 

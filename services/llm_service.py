@@ -1,7 +1,7 @@
 """
 Thin wrapper around the LLM API. Enforces:
  - grounded-only prompting (LLM must answer only from provided context)
- - structured JSON output (span-based extraction, not free-text generation)
+ - structured JSON output (field-based extraction, not free-text generation)
 
 confidence here is a placeholder (0.9) — validation_service.verify_grounding
 is the authority on final confidence, since it checks the span actually
@@ -13,26 +13,32 @@ from typing import List
 from openai import OpenAI
 
 from config import OPENAI_API_KEY
-from models.schemas import ExtractedClause
+from models.schemas import ExtractedField
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-EXTRACTION_SYSTEM_PROMPT = """You are a contract clause extraction engine.
+EXTRACTION_SYSTEM_PROMPT = """You are a Wohngeld (housing benefit) application field extraction engine.
 
 Rules:
-- Extract clauses ONLY from the provided context. Never invent text.
+- Extract fields ONLY from the provided context. Never invent data.
 - Each extracted_text field must be an EXACT substring copied from the
-  context — do not paraphrase, do not summarize.
-- If no relevant clause exists in the context, return an empty "clauses" array.
-- Classify risk_level as one of: high, medium, low, safe.
+  context — do not paraphrase, do not summarize, do not calculate.
+- If a required field is not found in the context, return it with
+  extracted_text as an empty string and status "missing".
+- Classify each field's status as one of: found, missing, unclear.
+- Field types to extract: applicant_name, applicant_dob, applicant_nationality,
+  marital_status, employment_status, unit_address, household_member,
+  income_entry, rent_total, rent_breakdown, bank_iban.
+- A document may contain multiple household_member or income_entry fields —
+  extract each as a separate item.
 - Respond with JSON only, matching the schema below.
 
-Schema: {"clauses": [{"clause_id": str, "clause_type": str,
-"extracted_text": str, "risk_level": str, "reasoning": str}]}
+Schema: {"fields": [{"field_id": str, "field_type": str,
+"extracted_text": str, "status": str, "reasoning": str}]}
 """
 
 
-def extract_clauses(context: str, page_number: int) -> List[ExtractedClause]:
+def extract_fields(context: str, page_number: int) -> List[ExtractedField]:
     response = client.chat.completions.create(
         model="gpt-4o",
         response_format={"type": "json_object"},
@@ -40,7 +46,7 @@ def extract_clauses(context: str, page_number: int) -> List[ExtractedClause]:
             {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"Context (page {page_number}):\n{context}\n\nExtract clauses as JSON.",
+                "content": f"Context (page {page_number}):\n{context}\n\nExtract fields as JSON.",
             },
         ],
     )
@@ -52,30 +58,31 @@ def extract_clauses(context: str, page_number: int) -> List[ExtractedClause]:
     except json.JSONDecodeError:
         return []
 
-    items = parsed.get("clauses", []) if isinstance(parsed, dict) else []
+    items = parsed.get("fields", []) if isinstance(parsed, dict) else []
 
-    clauses = []
+    fields = []
     for item in items:
-        clauses.append(
-            ExtractedClause(
-                clause_id=item.get("clause_id", ""),
-                clause_type=item.get("clause_type", "unknown"),
+        fields.append(
+            ExtractedField(
+                field_id=item.get("field_id", ""),
+                field_type=item.get("field_type", "unknown"),
                 extracted_text=item.get("extracted_text", ""),
                 page_number=page_number,
-                risk_level=item.get("risk_level", "low"),
+                status=item.get("status", "missing"),
                 reasoning=item.get("reasoning", ""),
                 confidence=0.9,
             )
         )
-    return clauses
+    return fields
 
-GROUNDED_ANSWER_SYSTEM_PROMPT = """You are a contract Q&A assistant.
+
+GROUNDED_ANSWER_SYSTEM_PROMPT = """You are a Wohngeld case Q&A assistant for case workers.
 
 Rules:
 - Answer ONLY using the provided context. Never use outside knowledge.
 - If the context does not contain enough information to answer, say so
   explicitly — do not guess or infer beyond what's written.
-- Keep answers concise and factual. Reference the relevant clause when possible.
+- Keep answers concise and factual. Reference the relevant field when possible.
 """
 
 

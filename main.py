@@ -5,9 +5,9 @@ Run locally: uvicorn main:app --reload
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import contracts
+from routers import applications
 
-app = FastAPI(title="Contract Intelligence Agent API", version="0.1.0")
+app = FastAPI(title="Verifast AI API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(contracts.router)
+app.include_router(applications.router)
 
 
 @app.get("/health")

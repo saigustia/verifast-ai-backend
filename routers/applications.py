@@ -1,10 +1,11 @@
 """
-API endpoints for the Contract Intelligence Agent.
-Mounted in main.py under /api/contracts.
+API endpoints for Verifast AI (Wohngeld application intake).
+Mounted in main.py under /api/applications.
 
-Upload is now async: /upload returns immediately with a document_id and
+Upload is async: /upload returns immediately with a document_id and
 status "processing"; the heavy pipeline (OCR, chunking, embedding,
-extraction) runs in a background task. Frontend polls /status/{id}.
+extraction, completeness-check) runs in a background task. Frontend
+polls /status/{id}.
 """
 import uuid
 from typing import Dict
@@ -15,23 +16,22 @@ from models.schemas import (
     ProcessingStatus,
     QueryRequest,
     QueryResponse,
-    RiskLevel,
     SourceReference,
     StatusResponse,
     UploadAcceptedResponse,
 )
-from services import chunking, llm_service, ocr_service, validation_service
+from services import chunking, letter_service, llm_service, ocr_service, validation_service
 from services.embedding_service import EmbeddingService
 from services.retrieval_service import RetrievalService
 
-router = APIRouter(prefix="/api/contracts", tags=["contracts"])
+router = APIRouter(prefix="/api/applications", tags=["applications"])
 
 # In-memory job store for skeleton purposes — replace with Redis/DB before production.
 _jobs: Dict[str, dict] = {}
 
 
 @router.post("/upload", response_model=UploadAcceptedResponse)
-async def upload_contract(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_application(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are supported.")
 
@@ -90,6 +90,23 @@ async def query_document(request: QueryRequest):
     )
 
 
+@router.get("/{document_id}/missing-letter")
+async def get_missing_letter(document_id: str):
+    job = _jobs.get(document_id)
+    if not job or job["status"] != ProcessingStatus.COMPLETED:
+        raise HTTPException(404, "Document not found or not finished processing yet.")
+
+    result = job["result"]
+    applicant_name = letter_service.get_applicant_name(result.fields)
+
+    letter = letter_service.generate_missing_fields_letter(
+        applicant_name=applicant_name,
+        document_id=document_id,
+        missing_flags=result.missing_document_flags,
+    )
+    return {"letter_text": letter}
+
+
 def _process_document(document_id: str, tmp_path: str, filename: str) -> None:
     """Runs in the background. Mirrors the old synchronous /upload logic."""
     try:
@@ -102,25 +119,24 @@ def _process_document(document_id: str, tmp_path: str, filename: str) -> None:
         embedding_service.index_chunks(chunks)
         retrieval_service = RetrievalService(embedding_service, chunks)
 
-        all_clauses = []
-        all_flags = []
+        all_fields = []
         for page_num, page_text in page_map.items():
-            raw_clauses = llm_service.extract_clauses(page_text, page_num)
-            for clause in raw_clauses:
-                all_clauses.append(validation_service.verify_grounding(clause, full_text))
-            all_flags.extend(validation_service.check_numerical_consistency(page_text, page_num))
+            raw_fields = llm_service.extract_fields(page_text, page_num)
+            for field in raw_fields:
+                all_fields.append(validation_service.verify_grounding(field, full_text))
 
-        grounded_clauses = [c for c in all_clauses if c.is_grounded]
-        risk_score = _compute_risk_score(grounded_clauses, all_flags)
+        grounded_fields = [f for f in all_fields if f.is_grounded]
+        missing_flags = validation_service.check_completeness(grounded_fields)
+        completeness_score = _compute_completeness_score(missing_flags)
 
-        from models.schemas import DocumentAnalysisResult
+        from models.schemas import ApplicationAnalysisResult
 
-        result = DocumentAnalysisResult(
+        result = ApplicationAnalysisResult(
             document_id=document_id,
             filename=filename,
-            clauses=grounded_clauses,
-            consistency_flags=all_flags,
-            overall_risk_score=risk_score,
+            fields=grounded_fields,
+            missing_document_flags=missing_flags,
+            completeness_score=completeness_score,
             total_pages=len(page_map),
         )
 
@@ -136,16 +152,11 @@ def _process_document(document_id: str, tmp_path: str, filename: str) -> None:
         _jobs[document_id].update({"status": ProcessingStatus.FAILED, "error": str(e)})
 
 
-def _compute_risk_score(clauses, flags) -> float:
-    if not clauses and not flags:
-        return 0.0
-    weights = {
-        RiskLevel.HIGH: 1.0,
-        RiskLevel.MEDIUM: 0.5,
-        RiskLevel.LOW: 0.2,
-        RiskLevel.SAFE: 0.0,
-    }
-    clause_score = sum(weights.get(c.risk_level, 0) for c in clauses)
-    flag_score = len(flags) * 1.0
-    max_possible = max(len(clauses) + len(flags), 1)
-    return round(min((clause_score + flag_score) / max_possible, 1.0), 2)
+def _compute_completeness_score(missing_flags) -> float:
+    from services.validation_service import WOHNGELD_REQUIRED_FIELDS
+
+    total_required = len(WOHNGELD_REQUIRED_FIELDS)
+    if total_required == 0:
+        return 1.0
+    missing_count = len(missing_flags)
+    return round(max(total_required - missing_count, 0) / total_required, 2)
