@@ -107,8 +107,6 @@ async def get_missing_letter(document_id: str):
     )
     return {"letter_text": letter}
 
-from services.letter_service import assemble_unit_address
-
 @router.get("/status/{document_id}")
 async def get_status(document_id: str):
     job = _jobs.get(document_id)
@@ -123,7 +121,7 @@ async def get_status(document_id: str):
     ).model_dump()
 
     if job["result"]:
-        response["assembled_unit_address"] = assemble_unit_address(job["result"].fields)
+        response["result"]["assembled_unit_address"] = assemble_unit_address(job["result"].fields)
 
     return response
 
