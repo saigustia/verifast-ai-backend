@@ -2,36 +2,33 @@
 API endpoints for Verifast AI (Wohngeld application intake).
 Mounted in main.py under /api/applications.
 
-Upload is async: /upload returns immediately with a document_id and
-status "processing"; the heavy pipeline (OCR, chunking, embedding,
-extraction, completeness-check) runs in a background task. Frontend
-polls /status/{id}.
+Architecture note: this backend does NOT hold source-of-truth state
+anymore. Status, results, and the missing-documents letter are pushed to
+Lovable Cloud's Supabase via ingest_client.push_to_supabase(); the
+frontend reads directly from that table. _jobs here is transient,
+in-process only, used to hold objects (chunks, retrieval_service) that
+can't be serialized to Supabase — needed for /query, lost on restart.
 """
 import uuid
 from typing import Dict
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
-from models.schemas import (
-    ProcessingStatus,
-    QueryRequest,
-    QueryResponse,
-    SourceReference,
-    StatusResponse,
-    UploadAcceptedResponse,
-)
+from models.schemas import QueryRequest, QueryResponse, SourceReference
 from services import chunking, letter_service, llm_service, ocr_service, validation_service
 from services.embedding_service import EmbeddingService
 from services.retrieval_service import RetrievalService
 from services.letter_service import assemble_unit_address
+from services.ingest_client import push_to_supabase
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
-# In-memory job store for skeleton purposes — replace with Redis/DB before production.
+# Transient, in-process only — NOT the source of truth. Holds objects that
+# can't go into Supabase (retrieval_service) for the /query endpoint only.
 _jobs: Dict[str, dict] = {}
 
 
-@router.post("/upload", response_model=UploadAcceptedResponse)
+@router.post("/upload")
 async def upload_application(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "Only PDF files are supported.")
@@ -41,16 +38,29 @@ async def upload_application(background_tasks: BackgroundTasks, file: UploadFile
     with open(tmp_path, "wb") as f:
         f.write(await file.read())
 
-    _jobs[document_id] = {"status": ProcessingStatus.PROCESSING, "result": None, "error": None}
+    _jobs[document_id] = {}
+
+    # Create the row immediately so the frontend has something to poll on.
+    push_to_supabase({
+        "document_id": document_id,
+        "status": "processing",
+        "filename": file.filename,
+    })
+
     background_tasks.add_task(_process_document, document_id, tmp_path, file.filename)
 
-    return UploadAcceptedResponse(document_id=document_id, status=ProcessingStatus.PROCESSING)
+    return {"document_id": document_id, "status": "processing"}
 
 
 @router.post("/query", response_model=QueryResponse)
 async def query_document(request: QueryRequest):
+    """
+    NOTE: still relies on in-memory _jobs (retrieval_service). Only works
+    for cases processed in the current server session — resets on
+    restart. Known limitation, not part of MVP core demo path.
+    """
     job = _jobs.get(request.document_id)
-    if not job or job["status"] != ProcessingStatus.COMPLETED:
+    if not job or "retrieval_service" not in job:
         raise HTTPException(404, "Document not found or not finished processing yet.")
 
     results, found = job["retrieval_service"].hybrid_search(request.question, top_k=3)
@@ -78,44 +88,7 @@ async def query_document(request: QueryRequest):
     )
 
 
-@router.get("/{document_id}/missing-letter")
-async def get_missing_letter(document_id: str):
-    job = _jobs.get(document_id)
-    if not job or job["status"] != ProcessingStatus.COMPLETED:
-        raise HTTPException(404, "Document not found or not finished processing yet.")
-
-    result = job["result"]
-    applicant_name = letter_service._get_applicant_name(result.fields)
-
-    letter = letter_service.generate_missing_fields_letter(
-        applicant_name=applicant_name,
-        document_id=document_id,
-        missing_flags=result.missing_document_flags,
-    )
-    return {"letter_text": letter}
-
-
-@router.get("/status/{document_id}")
-async def get_status(document_id: str):
-    job = _jobs.get(document_id)
-    if not job:
-        raise HTTPException(404, "Document not found.")
-
-    response = StatusResponse(
-        document_id=document_id,
-        status=job["status"],
-        result=job["result"],
-        error=job["error"],
-    ).model_dump()
-
-    if job["result"]:
-        response["result"]["assembled_unit_address"] = assemble_unit_address(job["result"].fields)
-
-    return response
-
-
 def _process_document(document_id: str, tmp_path: str, filename: str) -> None:
-    """Runs in the background. Mirrors the old synchronous /upload logic."""
     try:
         page_map = ocr_service.extract_pages(tmp_path)
         full_text = "\n".join(page_map.values())
@@ -135,28 +108,37 @@ def _process_document(document_id: str, tmp_path: str, filename: str) -> None:
         grounded_fields = [f for f in all_fields if f.is_grounded]
         missing_flags = validation_service.check_completeness(grounded_fields)
         completeness_score = _compute_completeness_score(missing_flags)
+        unit_address = assemble_unit_address(grounded_fields)
 
-        from models.schemas import ApplicationAnalysisResult
-
-        result = ApplicationAnalysisResult(
+        applicant_name = letter_service._get_applicant_name(grounded_fields)
+        letter_text = letter_service.generate_missing_fields_letter(
+            applicant_name=applicant_name,
             document_id=document_id,
-            filename=filename,
-            fields=grounded_fields,
-            missing_document_flags=missing_flags,
-            completeness_score=completeness_score,
-            total_pages=len(page_map),
+            missing_flags=missing_flags,
         )
 
-        _jobs[document_id].update(
-            {
-                "status": ProcessingStatus.COMPLETED,
-                "result": result,
-                "chunks": chunks,
-                "retrieval_service": retrieval_service,
-            }
-        )
-    except Exception as e:  # noqa: BLE001 — surface any failure to the status endpoint
-        _jobs[document_id].update({"status": ProcessingStatus.FAILED, "error": str(e)})
+        push_to_supabase({
+            "document_id": document_id,
+            "status": "completed",
+            "filename": filename,
+            "fields": [f.model_dump() for f in grounded_fields],
+            "missing_document_flags": [m.model_dump() for m in missing_flags],
+            "completeness_score": completeness_score,
+            "total_pages": len(page_map),
+            "assembled_unit_address": unit_address,
+            "letter_text": letter_text,  # CONFIRM this column exists in Supabase before relying on it
+        })
+
+        # Keep retrieval_service in memory ONLY for /query during this session.
+        _jobs[document_id] = {"chunks": chunks, "retrieval_service": retrieval_service}
+
+    except Exception as e:  # noqa: BLE001
+        push_to_supabase({
+            "document_id": document_id,
+            "status": "failed",
+            "filename": filename,
+            "error": str(e),
+        })
 
 
 def _compute_completeness_score(missing_flags) -> float:
