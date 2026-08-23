@@ -47,19 +47,6 @@ async def upload_application(background_tasks: BackgroundTasks, file: UploadFile
     return UploadAcceptedResponse(document_id=document_id, status=ProcessingStatus.PROCESSING)
 
 
-@router.get("/status/{document_id}", response_model=StatusResponse)
-async def get_status(document_id: str):
-    job = _jobs.get(document_id)
-    if not job:
-        raise HTTPException(404, "Document not found.")
-    return StatusResponse(
-        document_id=document_id,
-        status=job["status"],
-        result=job["result"],
-        error=job["error"],
-    )
-
-
 @router.post("/query", response_model=QueryResponse)
 async def query_document(request: QueryRequest):
     job = _jobs.get(request.document_id)
@@ -90,6 +77,24 @@ async def query_document(request: QueryRequest):
         found=True,
     )
 
+
+@router.get("/{document_id}/missing-letter")
+async def get_missing_letter(document_id: str):
+    job = _jobs.get(document_id)
+    if not job or job["status"] != ProcessingStatus.COMPLETED:
+        raise HTTPException(404, "Document not found or not finished processing yet.")
+
+    result = job["result"]
+    applicant_name = letter_service._get_applicant_name(result.fields)
+
+    letter = letter_service.generate_missing_fields_letter(
+        applicant_name=applicant_name,
+        document_id=document_id,
+        missing_flags=result.missing_document_flags,
+    )
+    return {"letter_text": letter}
+
+
 @router.get("/status/{document_id}")
 async def get_status(document_id: str):
     job = _jobs.get(document_id)
@@ -107,6 +112,7 @@ async def get_status(document_id: str):
         response["result"]["assembled_unit_address"] = assemble_unit_address(job["result"].fields)
 
     return response
+
 
 def _process_document(document_id: str, tmp_path: str, filename: str) -> None:
     """Runs in the background. Mirrors the old synchronous /upload logic."""
