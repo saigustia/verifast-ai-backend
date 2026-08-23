@@ -18,7 +18,10 @@ FIELD_LABELS_DE = {
     "applicant_nationality": "Ihre Staatsangehörigkeit",
     "marital_status": "Ihr Familienstand",
     "employment_status": "Ihr Erwerbsstatus",
-    "unit_address": "Die Anschrift der Wohnung, für die Sie Wohngeld beantragen",
+    "unit_street": "Die Straße Ihrer Wohnung",
+    "unit_house_number": "Die Hausnummer Ihrer Wohnung",
+    "unit_postal_code": "Die Postleitzahl Ihrer Wohnung",
+    "unit_city": "Der Ort Ihrer Wohnung",
     "household_member": "Angaben zu Ihren Haushaltsmitgliedern",
     "income_entry": "Angaben zu Ihren Einnahmen",
     "rent_total": "Die Gesamtmiete, die Sie an Ihren Vermieter zahlen",
@@ -30,6 +33,19 @@ def _get_applicant_name(fields: List[ExtractedField]) -> str:
         if f.field_type == "applicant_name" and f.status == FieldStatus.FOUND:
             return f.extracted_text
     return "Antragsteller/in"
+
+def assemble_unit_address(fields: List[ExtractedField]) -> str:
+    """Combines the 4 atomic address fields into one display string.
+    Done in Python, not by the LLM, so each sub-field stays grounded
+    (exact substring) while the assembled address still looks human-readable."""
+    parts = {f.field_type: f.extracted_text for f in fields if f.status == FieldStatus.FOUND}
+    street = parts.get("unit_street", "")
+    number = parts.get("unit_house_number", "")
+    plz = parts.get("unit_postal_code", "")
+    city = parts.get("unit_city", "")
+    if not any([street, number, plz, city]):
+        return ""
+    return f"{street} {number}, {plz} {city}".strip()
 
 def generate_missing_fields_letter(
     applicant_name: str,

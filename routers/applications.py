@@ -23,6 +23,7 @@ from models.schemas import (
 from services import chunking, letter_service, llm_service, ocr_service, validation_service
 from services.embedding_service import EmbeddingService
 from services.retrieval_service import RetrievalService
+from services.letter_service import assemble_unit_address
 
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
@@ -97,7 +98,7 @@ async def get_missing_letter(document_id: str):
         raise HTTPException(404, "Document not found or not finished processing yet.")
 
     result = job["result"]
-    applicant_name = letter_service.get_applicant_name(result.fields)
+    applicant_name = letter_service._get_applicant_name(result.fields)
 
     letter = letter_service.generate_missing_fields_letter(
         applicant_name=applicant_name,
@@ -106,6 +107,25 @@ async def get_missing_letter(document_id: str):
     )
     return {"letter_text": letter}
 
+from services.letter_service import assemble_unit_address
+
+@router.get("/status/{document_id}")
+async def get_status(document_id: str):
+    job = _jobs.get(document_id)
+    if not job:
+        raise HTTPException(404, "Document not found.")
+
+    response = StatusResponse(
+        document_id=document_id,
+        status=job["status"],
+        result=job["result"],
+        error=job["error"],
+    ).model_dump()
+
+    if job["result"]:
+        response["assembled_unit_address"] = assemble_unit_address(job["result"].fields)
+
+    return response
 
 def _process_document(document_id: str, tmp_path: str, filename: str) -> None:
     """Runs in the background. Mirrors the old synchronous /upload logic."""

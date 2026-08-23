@@ -26,9 +26,7 @@ Rules:
 - If a required field is not found in the context, return it with
   extracted_text as an empty string and status "missing".
 - Classify each field's status as one of: found, missing, unclear.
-- Field types to extract: applicant_name, applicant_dob, applicant_nationality,
-  marital_status, employment_status, unit_address, household_member,
-  income_entry, rent_total, rent_breakdown, bank_iban.
+- Field types to extract: applicant_name, applicant_dob, applicant_nationality, marital_status, employment_status, unit_street, unit_house_number, unit_postal_code, unit_city, household_member, income_entry, rent_total, rent_breakdown, bank_iban.
 - A document may contain multiple household_member or income_entry fields —
   extract each as a separate item.
 - Respond with JSON only, matching the schema below.
