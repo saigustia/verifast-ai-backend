@@ -7,11 +7,12 @@ auditable than generative text for this purpose.
 from datetime import date
 from typing import List
 
-from models.schemas import MissingDocumentFlag, ExtractedField, FieldStatus
+from models.schemas import ExtractedField, FieldStatus, MissingDocumentFlag
 
-# Maps internal field_type slugs to the actual German question/label as it
-# appears on the Berlin Wohngeldantrag, so the letter references something
-# the applicant recognizes from the form they filled out.
+# Maps flag.related_field_type to German text for the letter. Two kinds
+# of keys now: singleton field_types (unchanged) AND group names
+# ("household_member", "income") — check_completeness flags missing
+# groups at the group level, not per sub-field, so the letter should too.
 FIELD_LABELS_DE = {
     "applicant_name": "Ihr vollständiger Name (Familienname und Vorname)",
     "applicant_dob": "Ihr Geburtsdatum",
@@ -22,22 +23,28 @@ FIELD_LABELS_DE = {
     "unit_house_number": "Die Hausnummer Ihrer Wohnung",
     "unit_postal_code": "Die Postleitzahl Ihrer Wohnung",
     "unit_city": "Der Ort Ihrer Wohnung",
-    "household_member": "Angaben zu Ihren Haushaltsmitgliedern",
-    "income_entry": "Angaben zu Ihren Einnahmen",
+    "household_member": "Vollständige Angaben zu mindestens einem Haushaltsmitglied (Name, Verhältnis zu Ihnen, Geburtsdatum)",
+    "income": "Vollständige Angaben zu mindestens einer Einnahmequelle (Art der Einnahme, Betrag, Turnus)",
     "rent_total": "Die Gesamtmiete, die Sie an Ihren Vermieter zahlen",
     "bank_iban": "Ihre Bankverbindung (IBAN) für die Auszahlung",
 }
 
+
 def _get_applicant_name(fields: List[ExtractedField]) -> str:
+    """Looks up the applicant's name from extracted fields. Unaffected by
+    entry_index — applicant_name is always a singleton field. Falls back
+    to a generic salutation if the name field itself was not found."""
     for f in fields:
         if f.field_type == "applicant_name" and f.status == FieldStatus.FOUND:
             return f.extracted_text
     return "Antragsteller/in"
 
+
 def assemble_unit_address(fields: List[ExtractedField]) -> str:
     """Combines the 4 atomic address fields into one display string.
     Done in Python, not by the LLM, so each sub-field stays grounded
-    (exact substring) while the assembled address still looks human-readable."""
+    (exact substring) while the assembled address still looks human-readable.
+    Unaffected by entry_index — address fields are singletons."""
     parts = {f.field_type: f.extracted_text for f in fields if f.status == FieldStatus.FOUND}
     street = parts.get("unit_street", "")
     number = parts.get("unit_house_number", "")
@@ -46,6 +53,7 @@ def assemble_unit_address(fields: List[ExtractedField]) -> str:
     if not any([street, number, plz, city]):
         return ""
     return f"{street} {number}, {plz} {city}".strip()
+
 
 def generate_missing_fields_letter(
     applicant_name: str,

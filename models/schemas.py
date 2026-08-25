@@ -47,6 +47,14 @@ class ExtractedField(BaseModel):
     reasoning: str
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
     is_grounded: bool = False
+    entry_index: Optional[int] = None
+    """
+    Groups repeated field types that belong to the same person/entry —
+    e.g. income_type/income_amount/income_frequency with entry_index=0
+    all belong to the same income source; entry_index=1 is a second
+    source. None means the field is a singleton (only occurs once per
+    application, e.g. applicant_name).
+    """
 
 
 class MissingDocumentFlag(BaseModel):

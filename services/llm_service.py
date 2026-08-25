@@ -26,13 +26,31 @@ Rules:
 - If a required field is not found in the context, return it with
   extracted_text as an empty string and status "missing".
 - Classify each field's status as one of: found, missing, unclear.
-- Field types to extract: applicant_name, applicant_dob, applicant_nationality, marital_status, employment_status, unit_street, unit_house_number, unit_postal_code, unit_city, household_member, income_entry, rent_total, rent_breakdown, bank_iban.
-- A document may contain multiple household_member or income_entry fields —
-  extract each as a separate item.
-- Respond with JSON only, matching the schema below.
+
+Field types to extract:
+  applicant_name, applicant_dob, applicant_nationality, marital_status,
+  employment_status, unit_street, unit_house_number, unit_postal_code,
+  unit_city, rent_total, bank_iban,
+  household_member_name, household_member_relation, household_member_dob,
+  income_owner_name, income_type, income_amount, income_frequency.
+
+entry_index rules (CRITICAL for repeated groups):
+- household_member_name/relation/dob: all three fields for the SAME person
+  share the same entry_index (integer, starting at 0). A different person
+  gets a different entry_index. The applicant's own entry in the
+  household-members section also gets an entry_index like any other member.
+- income_owner_name/type/amount/frequency: all four fields for the SAME
+  income source share the same entry_index. If one person has 2 income
+  sources, that's 2 separate entry_index groups, each including its own
+  income_owner_name (even if it repeats the same person's name).
+- All other field types (applicant_name, rent_total, bank_iban, etc.) are
+  singletons — entry_index must be null for these.
+
+Respond with JSON only, matching the schema below.
 
 Schema: {"fields": [{"field_id": str, "field_type": str,
-"extracted_text": str, "status": str, "reasoning": str}]}
+"extracted_text": str, "status": str, "reasoning": str,
+"entry_index": int or null}]}
 """
 
 
@@ -69,6 +87,7 @@ def extract_fields(context: str, page_number: int) -> List[ExtractedField]:
                 status=item.get("status", "missing"),
                 reasoning=item.get("reasoning", ""),
                 confidence=0.9,
+                entry_index=item.get("entry_index"),
             )
         )
     return fields
